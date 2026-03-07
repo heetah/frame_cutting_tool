@@ -1,4 +1,4 @@
-# CV Project: Timeline Frame Extractor ?
+# CV Project: Timeline Frame Extractor
 
 A high-speed, GUI-based video frame extraction tool built with Python and FFmpeg. This tool is designed for Computer Vision data preprocessing, specifically for extracting fine-grained action frames (e.g., littering behavior) from surveillance videos.
 
@@ -13,7 +13,8 @@ A high-speed, GUI-based video frame extraction tool built with Python and FFmpeg
 
 **For Windows Users:**
 Open PowerShell and run:
-`winget install Gyan.FFmpeg`
+    ```bash
+    winget install Gyan.FFmpeg
 *(Restart your terminal after installation)*
 
 ## Installation
