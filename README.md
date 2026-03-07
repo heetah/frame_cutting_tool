@@ -9,7 +9,7 @@ A high-speed, GUI-based video frame extraction tool built with Python and FFmpeg
 - **Auto-Naming:** Prevents overwriting old datasets by using timestamped prefixes.
 
 ## Prerequisites
-?? **Important:** This tool requires `FFmpeg` to be installed on your system.
+**Important:** This tool requires `FFmpeg` to be installed on your system.
 
 **For Windows Users:**
 Open PowerShell and run:
@@ -18,13 +18,13 @@ Open PowerShell and run:
 
 ## Installation
 1. Clone the repository:
-   `git clone https://github.com/heetah/frame_cutting_tool.git`
-   `cd your-repo-name`
+   ```git clone https://github.com/heetah/frame_cutting_tool.git```
+   ```cd your-repo-name```
 2. Create a Conda environment (Recommended):
-    `conda create -n cv_env python=3.10`
-    `conda activate cv_env`
+    ```conda create -n cv_env python=3.10```
+    ```conda activate cv_env```
 3. Install Python dependencies:
     Bash
-    `pip install -r requirements.txt`
+    ```pip install -r requirements.txt```
 4. Run the application
-    `python main.py`
+    ```python main.py```
