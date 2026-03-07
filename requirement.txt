@@ -1,0 +1,7 @@
+customtkinter
+tkinter
+opencv-python
+Pillow
+subprocess
+time
+PIL
