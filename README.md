@@ -11,13 +11,20 @@ A high-speed, GUI-based video frame extraction tool built with Python and FFmpeg
 ## Prerequisites
 **Important:** This tool requires `FFmpeg` to be installed on your system.
 
-**For Windows Users:**
-Open PowerShell and run:
+## For Windows Users:
 
     winget install Gyan.FFmpeg
 *(Restart your terminal after installation)*
 
-## Installation
+## For macOS Users:
+
+    brew install ffmpeg
+
+## For Linux Users:
+
+    sudo apt update && sudo apt install ffmpeg
+
+### Installation
 1. Clone the repository:
    
    ```bash
