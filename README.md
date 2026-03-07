@@ -18,13 +18,16 @@ Open PowerShell and run:
 
 ## Installation
 1. Clone the repository:
+   bash
    ```git clone https://github.com/heetah/frame_cutting_tool.git```
    ```cd your-repo-name```
-2. Create a Conda environment (Recommended):
+3. Create a Conda environment (Recommended):
+   bash
     ```conda create -n cv_env python=3.10```
     ```conda activate cv_env```
-3. Install Python dependencies:
-    Bash
+5. Install Python dependencies:
+    python
     ```pip install -r requirements.txt```
-4. Run the application
+6. Run the application
+   python
     ```python main.py```
