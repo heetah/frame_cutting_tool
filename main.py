@@ -12,6 +12,7 @@ from PIL import Image
 class DualTimelineSlider(tk.Canvas):
     def __init__(self, master, width=640, height=45, max_val=100.0, command=None, bg_color="#2B2B2B"):
         super().__init__(master, width=width, height=height, bg=bg_color, highlightthickness=0)
+        self.base_width = width
         self.width = width
         self.height = height
         self.max_val = max_val
@@ -23,11 +24,43 @@ class DualTimelineSlider(tk.Canvas):
         self.start_val = 0.0
         self.end_val = max_val
         self.active_handle = None 
+        
+        # 縮放比例紀錄
+        self.zoom_level = 1.0
 
         self.bind("<Button-1>", self.click)
         self.bind("<B1-Motion>", self.drag)
         self.bind("<ButtonRelease-1>", self.release)
+        
+        # 綁定 Ctrl+滾輪 縮放 (兼容 Windows/Mac 及 Linux)
+        self.bind("<Control-MouseWheel>", self.on_zoom)
+        self.bind("<Control-Button-4>", self.on_zoom)
+        self.bind("<Control-Button-5>", self.on_zoom)
 
+        self.draw()
+
+    def on_zoom(self, event):
+        if self.max_val == 0: return # 沒有載入影片時不縮放
+
+        # 判斷滾輪方向
+        direction = 0
+        if hasattr(event, "delta") and event.delta != 0:
+            direction = 1 if event.delta > 0 else -1
+        elif hasattr(event, "num"):
+            direction = 1 if event.num == 4 else -1
+
+        if direction > 0:
+            self.zoom_level *= 1.25  # 放大
+        elif direction < 0:
+            self.zoom_level /= 1.25  # 縮小
+            
+        # 限制縮放範圍 (1x 到 20x)
+        self.zoom_level = max(1.0, min(self.zoom_level, 20.0))
+        
+        # 更新寬度與重繪
+        self.width = int(self.base_width * self.zoom_level)
+        self.config(width=self.width)
+        self.track_w = self.width - 2 * self.pad
         self.draw()
 
     def set_max(self, max_val):
@@ -102,7 +135,7 @@ class VideoExtractorApp(ctk.CTk):
         super().__init__()
 
         self.title("🚀 CV Project - Timeline Frame Extractor")
-        self.geometry("950x800")
+        self.geometry("950x850")
         
         self.video_path = None
         self.cap = None
@@ -111,8 +144,9 @@ class VideoExtractorApp(ctk.CTk):
         self.is_playing = False
         self.play_after_id = None
         
-        # 新增：用於儲存多個區段的佇列
         self.segments_queue = []
+        self.preview_scale = 1.0  # 影片預覽縮放比例
+        self.current_sec = 0.0    # 紀錄當前播放時間以利縮放重繪
 
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
@@ -125,14 +159,12 @@ class VideoExtractorApp(ctk.CTk):
         self.logo_label = ctk.CTkLabel(self.sidebar_frame, text="Extraction Settings", font=ctk.CTkFont(size=20, weight="bold"))
         self.logo_label.grid(row=0, column=0, padx=20, pady=(20, 10))
 
-        # FPS 設定 (加上預設數值顯示，並綁定 command)
         self.fps_label = ctk.CTkLabel(self.sidebar_frame, text="Target FPS: 5")
         self.fps_label.grid(row=1, column=0, padx=20, pady=(10, 0), sticky="w")
         self.fps_slider = ctk.CTkSlider(self.sidebar_frame, from_=1, to=30, number_of_steps=29, command=self.update_fps_label)
         self.fps_slider.set(5)
         self.fps_slider.grid(row=2, column=0, padx=20, pady=(0, 10))
 
-        # 畫質設定 (加上預設數值顯示，並綁定 command)
         self.quality_label = ctk.CTkLabel(self.sidebar_frame, text="JPEG Quality: 2")
         self.quality_label.grid(row=3, column=0, padx=20, pady=(10, 0), sticky="w")
         self.quality_slider = ctk.CTkSlider(self.sidebar_frame, from_=1, to=31, number_of_steps=30, command=self.update_quality_label)
@@ -159,11 +191,25 @@ class VideoExtractorApp(ctk.CTk):
         self.info_label = ctk.CTkLabel(self.top_control_frame, text="No video loaded.", text_color="gray")
         self.info_label.grid(row=0, column=1, padx=10)
 
-        self.preview_label = ctk.CTkLabel(self.main_frame, text="Preview", fg_color="black", width=640, height=360)
-        self.preview_label.grid(row=1, column=0, pady=10)
+        # 改用可滾動框架包裝預覽區域
+        self.preview_scroll_frame = ctk.CTkScrollableFrame(self.main_frame, width=640, height=360)
+        self.preview_scroll_frame.grid(row=1, column=0, pady=10)
+        self.preview_scroll_frame.grid_rowconfigure(0, weight=1)
+        self.preview_scroll_frame.grid_columnconfigure(0, weight=1)
+        
+        self.preview_label = ctk.CTkLabel(self.preview_scroll_frame, text="Preview", fg_color="black")
+        self.preview_label.grid(row=0, column=0, sticky="nsew")
 
-        self.timeline = DualTimelineSlider(self.main_frame, width=640, max_val=0, command=self.on_timeline_slide)
-        self.timeline.grid(row=2, column=0, pady=(10, 5))
+        # 影片預覽區域綁定 Ctrl+滾輪
+        self._bind_video_zoom(self.preview_label)
+        self._bind_video_zoom(self.preview_scroll_frame._parent_canvas) # 綁定背景Canvas確保隨處可觸發
+
+        # 改用可滾動框架包裝時間軸 (為了支持寬度縮放)
+        self.timeline_scroll_frame = ctk.CTkScrollableFrame(self.main_frame, width=640, height=65, orientation="horizontal")
+        self.timeline_scroll_frame.grid(row=2, column=0, pady=(10, 5))
+        
+        self.timeline = DualTimelineSlider(self.timeline_scroll_frame, width=640, max_val=0, command=self.on_timeline_slide)
+        self.timeline.grid(row=0, column=0)
 
         self.timeline_info_frame = ctk.CTkFrame(self.main_frame, fg_color="transparent")
         self.timeline_info_frame.grid(row=3, column=0, sticky="ew", padx=30)
@@ -175,11 +221,9 @@ class VideoExtractorApp(ctk.CTk):
         self.play_btn = ctk.CTkButton(self.timeline_info_frame, text="▶ Play", command=self.toggle_play, state="disabled", width=80, fg_color="#F39C12", hover_color="#D68910")
         self.play_btn.grid(row=0, column=2, sticky="e", padx=(0, 10))
 
-        # 新增：加入暫存按鈕
         self.add_queue_btn = ctk.CTkButton(self.timeline_info_frame, text="➕ Add to Queue", command=self.add_to_queue, state="disabled", width=120, fg_color="#2980B9", hover_color="#1F618D")
         self.add_queue_btn.grid(row=0, column=3, sticky="e")
 
-        # 新增：暫存清單顯示區
         self.queue_frame = ctk.CTkFrame(self.main_frame, fg_color="#333333")
         self.queue_frame.grid(row=4, column=0, sticky="ew", padx=30, pady=(15, 5))
         self.queue_frame.grid_columnconfigure(0, weight=1)
@@ -193,13 +237,37 @@ class VideoExtractorApp(ctk.CTk):
         self.extract_btn = ctk.CTkButton(self.main_frame, text="🚀 Start FFmpeg Extraction", command=self.run_extraction, fg_color="green", hover_color="darkgreen", state="disabled", height=40)
         self.extract_btn.grid(row=5, column=0, pady=(15, 10))
 
+    # ================= 綁定輔助方法 =================
+    def _bind_video_zoom(self, widget):
+        widget.bind("<Control-MouseWheel>", self.on_video_zoom)
+        widget.bind("<Control-Button-4>", self.on_video_zoom)
+        widget.bind("<Control-Button-5>", self.on_video_zoom)
+
+    # ================= 影片預覽縮放邏輯 =================
+    def on_video_zoom(self, event):
+        if not self.cap: return
+        
+        direction = 0
+        if hasattr(event, "delta") and event.delta != 0:
+            direction = 1 if event.delta > 0 else -1
+        elif hasattr(event, "num"):
+            direction = 1 if event.num == 4 else -1
+
+        if direction > 0:
+            self.preview_scale *= 1.2
+        elif direction < 0:
+            self.preview_scale /= 1.2
+            
+        self.preview_scale = max(0.5, min(self.preview_scale, 8.0)) # 限制縮放比例
+        self.show_frame_at(self.current_sec) # 原地重繪當下影格
+
     # ================= UI 更新邏輯 =================
     def update_fps_label(self, value):
-        # 將浮點數轉為整數顯示
         self.fps_label.configure(text=f"Target FPS: {int(value)}")
 
     def update_quality_label(self, value):
         self.quality_label.configure(text=f"JPEG Quality: {int(value)}")
+        
     # ================= 核心邏輯 =================
     def load_video(self):
         file_path = filedialog.askopenfilename(filetypes=[("Video Files", "*.mp4 *.avi *.mov")])
@@ -215,8 +283,12 @@ class VideoExtractorApp(ctk.CTk):
 
         self.info_label.configure(text=f"Loaded: {os.path.basename(file_path)} | Length: {self.duration:.2f}s | FPS: {self.video_fps:.2f}", text_color="white")
 
+        # 重置縮放
+        self.preview_scale = 1.0
+        self.timeline.zoom_level = 1.0
         self.timeline.set_max(self.duration)
-        self.clear_queue() # 載入新影片時清空暫存
+        
+        self.clear_queue() 
         
         self.play_btn.configure(state="normal")
         self.add_queue_btn.configure(state="normal")
@@ -235,16 +307,25 @@ class VideoExtractorApp(ctk.CTk):
         clip_duration = end_sec - start_sec
         self.time_info_label.configure(text=f"[ {start_sec:.2f}s  -  {end_sec:.2f}s ]  Length: {clip_duration:.2f}s")
 
+    def render_image(self, frame):
+        # 負責將 cv2 畫面加上縮放比例並渲染至 UI
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        img = Image.fromarray(frame_rgb)
+        
+        new_w = int(640 * self.preview_scale)
+        new_h = int(360 * self.preview_scale)
+        ctk_img = ctk.CTkImage(light_image=img, dark_image=img, size=(new_w, new_h))
+        
+        self.preview_label.configure(image=ctk_img, text="")
+        self.preview_label.image = ctk_img
+
     def show_frame_at(self, seconds):
         if not self.cap: return
+        self.current_sec = seconds
         self.cap.set(cv2.CAP_PROP_POS_MSEC, seconds * 1000)
         ret, frame = self.cap.read()
         if ret:
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            img = Image.fromarray(frame_rgb)
-            ctk_img = ctk.CTkImage(light_image=img, dark_image=img, size=(640, 360))
-            self.preview_label.configure(image=ctk_img, text="")
-            self.preview_label.image = ctk_img
+            self.render_image(frame)
 
     # ================= 區段暫存邏輯 =================
     def add_to_queue(self):
@@ -266,7 +347,6 @@ class VideoExtractorApp(ctk.CTk):
             self.clear_queue_btn.configure(state="disabled")
             self.extract_btn.configure(text="🚀 Start FFmpeg Extraction")
         else:
-            # 顯示最近加入的三筆，避免文字太長
             display_text = f"Queued Segments: {count}  |  "
             recent_segments = self.segments_queue[-3:]
             display_text += ", ".join([f"[{s:.1f}s-{e:.1f}s]" for s, e in recent_segments])
@@ -307,20 +387,15 @@ class VideoExtractorApp(ctk.CTk):
         if not self.is_playing: return
         
         _, end_sec = self.timeline.get_vals()
-        current_sec = self.cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0
+        self.current_sec = self.cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0
 
-        if current_sec >= end_sec:
+        if self.current_sec >= end_sec:
             self.stop_playback()
             return
 
         ret, frame = self.cap.read()
         if ret:
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            img = Image.fromarray(frame_rgb)
-            ctk_img = ctk.CTkImage(light_image=img, dark_image=img, size=(640, 360))
-            self.preview_label.configure(image=ctk_img)
-            self.preview_label.image = ctk_img
-            
+            self.render_image(frame)
             delay = int(1000 / self.video_fps) if self.video_fps > 0 else 33
             self.play_after_id = self.after(delay, self.play_loop)
         else:
@@ -330,7 +405,6 @@ class VideoExtractorApp(ctk.CTk):
     def run_extraction(self):
         self.stop_playback()
         
-        # 決定要處理哪些區段：如果清單有東西就處理清單，否則處理當前時間軸
         segments_to_process = self.segments_queue if self.segments_queue else [self.timeline.get_vals()]
         
         output_folder = self.folder_entry.get()
@@ -352,12 +426,10 @@ class VideoExtractorApp(ctk.CTk):
             start_time_total = time.time()
             total_new_files = 0
             
-            # 依序處理每一個區段
             for idx, (start_sec, end_sec) in enumerate(segments_to_process):
                 clip_duration = end_sec - start_sec
                 if clip_duration <= 0: continue
                 
-                # 給予獨特的 Timestamp 避免檔名覆蓋，idx 確保同秒數執行不會撞名
                 current_timestamp = int(time.time()) + idx 
                 output_pattern = os.path.join(output_folder, f"clip_{current_timestamp}_frame_%05d.jpg")
 
@@ -373,7 +445,6 @@ class VideoExtractorApp(ctk.CTk):
 
                 subprocess.run(command, capture_output=True, text=True, check=True, encoding='utf-8')
                 
-                # 計算這次迴圈產生的檔案數量
                 new_files_count = len([f for f in os.listdir(output_folder) if f"clip_{current_timestamp}" in f])
                 total_new_files += new_files_count
 
@@ -386,7 +457,6 @@ class VideoExtractorApp(ctk.CTk):
                 f"Time taken: {end_time_total - start_time_total:.2f}s"
             )
             
-            # 處理成功後自動清空暫存清單
             self.clear_queue()
             
         except subprocess.CalledProcessError as e:
