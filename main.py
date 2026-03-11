@@ -6,7 +6,7 @@ import os
 import subprocess
 import time
 import shutil
-from PIL import Image
+from PIL import Image, ImageTk
 
 # ================= 自定義：三星風格雙把手時間軸 =================
 class DualTimelineSlider(tk.Canvas):
@@ -25,14 +25,12 @@ class DualTimelineSlider(tk.Canvas):
         self.end_val = max_val
         self.active_handle = None 
         
-        # 縮放比例紀錄
         self.zoom_level = 1.0
 
         self.bind("<Button-1>", self.click)
         self.bind("<B1-Motion>", self.drag)
         self.bind("<ButtonRelease-1>", self.release)
         
-        # 綁定 Ctrl+滾輪 縮放 (兼容 Windows/Mac 及 Linux)
         self.bind("<Control-MouseWheel>", self.on_zoom)
         self.bind("<Control-Button-4>", self.on_zoom)
         self.bind("<Control-Button-5>", self.on_zoom)
@@ -40,9 +38,8 @@ class DualTimelineSlider(tk.Canvas):
         self.draw()
 
     def on_zoom(self, event):
-        if self.max_val == 0: return # 沒有載入影片時不縮放
+        if self.max_val == 0: return 
 
-        # 判斷滾輪方向
         direction = 0
         if hasattr(event, "delta") and event.delta != 0:
             direction = 1 if event.delta > 0 else -1
@@ -50,14 +47,12 @@ class DualTimelineSlider(tk.Canvas):
             direction = 1 if event.num == 4 else -1
 
         if direction > 0:
-            self.zoom_level *= 1.25  # 放大
+            self.zoom_level *= 1.25  
         elif direction < 0:
-            self.zoom_level /= 1.25  # 縮小
+            self.zoom_level /= 1.25  
             
-        # 限制縮放範圍 (1x 到 20x)
         self.zoom_level = max(1.0, min(self.zoom_level, 20.0))
         
-        # 更新寬度與重繪
         self.width = int(self.base_width * self.zoom_level)
         self.config(width=self.width)
         self.track_w = self.width - 2 * self.pad
@@ -134,19 +129,28 @@ class VideoExtractorApp(ctk.CTk):
     def __init__(self):
         super().__init__()
 
-        self.title("🚀 CV Project - Timeline Frame Extractor")
-        self.geometry("950x850")
+        self.title("🚀 CV Project - Advanced Video Extractor (Timeline & Crop)")
+        self.geometry("1100x950")
         
         self.video_path = None
         self.cap = None
         self.video_fps = 0
         self.duration = 0
+        self.real_w = 0  # 影片原始寬度
+        self.real_h = 0  # 影片原始高度
         self.is_playing = False
         self.play_after_id = None
         
         self.segments_queue = []
-        self.preview_scale = 1.0  # 影片預覽縮放比例
-        self.current_sec = 0.0    # 紀錄當前播放時間以利縮放重繪
+        self.preview_scale = 1.0  
+        self.current_sec = 0.0    
+        
+        # 裁切 (Crop) 狀態
+        self.crop_box_real = None  
+        self.crop_start_x = 0
+        self.crop_start_y = 0
+        self.rect_id = None
+        self.tk_img = None 
 
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
@@ -154,28 +158,34 @@ class VideoExtractorApp(ctk.CTk):
         # === 左側控制面板 ===
         self.sidebar_frame = ctk.CTkFrame(self, width=250, corner_radius=0)
         self.sidebar_frame.grid(row=0, column=0, sticky="nsew")
-        self.sidebar_frame.grid_rowconfigure(8, weight=1)
+        self.sidebar_frame.grid_rowconfigure(10, weight=1) 
 
         self.logo_label = ctk.CTkLabel(self.sidebar_frame, text="Extraction Settings", font=ctk.CTkFont(size=20, weight="bold"))
         self.logo_label.grid(row=0, column=0, padx=20, pady=(20, 10))
 
+        self.export_mode_label = ctk.CTkLabel(self.sidebar_frame, text="Export Mode:")
+        self.export_mode_label.grid(row=1, column=0, padx=20, pady=(10, 0), sticky="w")
+        self.export_mode = ctk.CTkSegmentedButton(self.sidebar_frame, values=["Frames", "Video"], command=self.on_export_mode_change)
+        self.export_mode.set("Frames")
+        self.export_mode.grid(row=2, column=0, padx=20, pady=(0, 10), sticky="ew")
+
         self.fps_label = ctk.CTkLabel(self.sidebar_frame, text="Target FPS: 5")
-        self.fps_label.grid(row=1, column=0, padx=20, pady=(10, 0), sticky="w")
+        self.fps_label.grid(row=3, column=0, padx=20, pady=(10, 0), sticky="w")
         self.fps_slider = ctk.CTkSlider(self.sidebar_frame, from_=1, to=30, number_of_steps=29, command=self.update_fps_label)
         self.fps_slider.set(5)
-        self.fps_slider.grid(row=2, column=0, padx=20, pady=(0, 10))
+        self.fps_slider.grid(row=4, column=0, padx=20, pady=(0, 10))
 
         self.quality_label = ctk.CTkLabel(self.sidebar_frame, text="JPEG Quality: 2")
-        self.quality_label.grid(row=3, column=0, padx=20, pady=(10, 0), sticky="w")
+        self.quality_label.grid(row=5, column=0, padx=20, pady=(10, 0), sticky="w")
         self.quality_slider = ctk.CTkSlider(self.sidebar_frame, from_=1, to=31, number_of_steps=30, command=self.update_quality_label)
         self.quality_slider.set(2)
-        self.quality_slider.grid(row=4, column=0, padx=20, pady=(0, 10))
+        self.quality_slider.grid(row=6, column=0, padx=20, pady=(0, 10))
 
         self.folder_label = ctk.CTkLabel(self.sidebar_frame, text="Output Directory:")
-        self.folder_label.grid(row=5, column=0, padx=20, pady=(10, 0), sticky="w")
+        self.folder_label.grid(row=7, column=0, padx=20, pady=(10, 0), sticky="w")
         self.folder_entry = ctk.CTkEntry(self.sidebar_frame, placeholder_text="extracted_dataset")
         self.folder_entry.insert(0, "extracted_dataset")
-        self.folder_entry.grid(row=6, column=0, padx=20, pady=(0, 10), sticky="ew")
+        self.folder_entry.grid(row=8, column=0, padx=20, pady=(0, 10), sticky="ew")
 
         # === 右側主要顯示區 ===
         self.main_frame = ctk.CTkFrame(self)
@@ -188,27 +198,33 @@ class VideoExtractorApp(ctk.CTk):
         self.upload_btn = ctk.CTkButton(self.top_control_frame, text="📁 Load Video", command=self.load_video, width=120)
         self.upload_btn.grid(row=0, column=0, padx=10)
 
-        self.info_label = ctk.CTkLabel(self.top_control_frame, text="No video loaded.", text_color="gray")
-        self.info_label.grid(row=0, column=1, padx=10)
+        self.reset_crop_btn = ctk.CTkButton(self.top_control_frame, text="✂️ Reset Crop", command=self.reset_crop, width=120, fg_color="#8E44AD", hover_color="#732D91", state="disabled")
+        self.reset_crop_btn.grid(row=0, column=1, padx=10)
 
-        # 改用可滾動框架包裝預覽區域
-        self.preview_scroll_frame = ctk.CTkScrollableFrame(self.main_frame, width=640, height=360)
+        self.info_label = ctk.CTkLabel(self.top_control_frame, text="No video loaded.", text_color="gray")
+        self.info_label.grid(row=0, column=2, padx=10, sticky="w")
+
+        # 預覽區域 (設定預設高度，讓版面看起來不會太擠)
+        self.preview_scroll_frame = ctk.CTkScrollableFrame(self.main_frame, width=750, height=580)
         self.preview_scroll_frame.grid(row=1, column=0, pady=10)
         self.preview_scroll_frame.grid_rowconfigure(0, weight=1)
         self.preview_scroll_frame.grid_columnconfigure(0, weight=1)
         
-        self.preview_label = ctk.CTkLabel(self.preview_scroll_frame, text="Preview", fg_color="black")
-        self.preview_label.grid(row=0, column=0, sticky="nsew")
+        self.preview_canvas = tk.Canvas(self.preview_scroll_frame, bg="black", highlightthickness=0)
+        self.preview_canvas.grid(row=0, column=0, sticky="nsew")
 
-        # 影片預覽區域綁定 Ctrl+滾輪
-        self._bind_video_zoom(self.preview_label)
-        self._bind_video_zoom(self.preview_scroll_frame._parent_canvas) # 綁定背景Canvas確保隨處可觸發
+        self.preview_canvas.bind("<ButtonPress-1>", self.on_crop_press)
+        self.preview_canvas.bind("<B1-Motion>", self.on_crop_drag)
+        self.preview_canvas.bind("<ButtonRelease-1>", self.on_crop_release)
 
-        # 改用可滾動框架包裝時間軸 (為了支持寬度縮放)
-        self.timeline_scroll_frame = ctk.CTkScrollableFrame(self.main_frame, width=640, height=65, orientation="horizontal")
+        self._bind_video_zoom(self.preview_canvas)
+        self._bind_video_zoom(self.preview_scroll_frame._parent_canvas) 
+
+        # 時間軸
+        self.timeline_scroll_frame = ctk.CTkScrollableFrame(self.main_frame, width=700, height=65, orientation="horizontal")
         self.timeline_scroll_frame.grid(row=2, column=0, pady=(10, 5))
         
-        self.timeline = DualTimelineSlider(self.timeline_scroll_frame, width=640, max_val=0, command=self.on_timeline_slide)
+        self.timeline = DualTimelineSlider(self.timeline_scroll_frame, width=700, max_val=0, command=self.on_timeline_slide)
         self.timeline.grid(row=0, column=0)
 
         self.timeline_info_frame = ctk.CTkFrame(self.main_frame, fg_color="transparent")
@@ -243,7 +259,7 @@ class VideoExtractorApp(ctk.CTk):
         widget.bind("<Control-Button-4>", self.on_video_zoom)
         widget.bind("<Control-Button-5>", self.on_video_zoom)
 
-    # ================= 影片預覽縮放邏輯 =================
+    # ================= 影片預覽與裁切邏輯 =================
     def on_video_zoom(self, event):
         if not self.cap: return
         
@@ -258,19 +274,127 @@ class VideoExtractorApp(ctk.CTk):
         elif direction < 0:
             self.preview_scale /= 1.2
             
-        self.preview_scale = max(0.5, min(self.preview_scale, 8.0)) # 限制縮放比例
-        self.show_frame_at(self.current_sec) # 原地重繪當下影格
+        # 放寬縮放限制 (0.05倍 ~ 10倍) 以適應 4K 等高解析度影片
+        self.preview_scale = max(0.05, min(self.preview_scale, 10.0)) 
+        self.show_frame_at(self.current_sec) 
+        self.draw_existing_crop_box() 
 
-    # ================= UI 更新邏輯 =================
+    def on_crop_press(self, event):
+        if not self.cap: return
+        self.crop_start_x = self.preview_canvas.canvasx(event.x)
+        self.crop_start_y = self.preview_canvas.canvasy(event.y)
+        
+        if self.rect_id:
+            self.preview_canvas.delete(self.rect_id)
+        
+        self.rect_id = self.preview_canvas.create_rectangle(
+            self.crop_start_x, self.crop_start_y, self.crop_start_x, self.crop_start_y,
+            outline="#E74C3C", width=2, dash=(4, 2)
+        )
+
+    def on_crop_drag(self, event):
+        if not self.cap or not self.rect_id: return
+        cur_x = self.preview_canvas.canvasx(event.x)
+        cur_y = self.preview_canvas.canvasy(event.y)
+        self.preview_canvas.coords(self.rect_id, self.crop_start_x, self.crop_start_y, cur_x, cur_y)
+
+    def on_crop_release(self, event):
+        if not self.cap or not self.rect_id: return
+        cur_x = self.preview_canvas.canvasx(event.x)
+        cur_y = self.preview_canvas.canvasy(event.y)
+        
+        x1, x2 = sorted([self.crop_start_x, cur_x])
+        y1, y2 = sorted([self.crop_start_y, cur_y])
+        
+        if (x2 - x1) < 10 or (y2 - y1) < 10:
+            self.preview_canvas.delete(self.rect_id)
+            self.rect_id = None
+            self.crop_box_real = None
+            return
+
+        # 根據實際影片大小計算畫布尺寸
+        canvas_w = int(self.real_w * self.preview_scale)
+        canvas_h = int(self.real_h * self.preview_scale)
+
+        x1, x2 = max(0, x1), min(canvas_w, x2)
+        y1, y2 = max(0, y1), min(canvas_h, y2)
+
+        # 回推真實座標 (因為畫布尺寸 = 真實尺寸 * preview_scale)
+        ratio = 1.0 / self.preview_scale
+        
+        real_x = int(x1 * ratio)
+        real_y = int(y1 * ratio)
+        real_w_crop = int((x2 - x1) * ratio)
+        real_h_crop = int((y2 - y1) * ratio)
+
+        real_w_crop = (real_w_crop // 2) * 2
+        real_h_crop = (real_h_crop // 2) * 2
+
+        self.crop_box_real = (real_x, real_y, real_w_crop, real_h_crop)
+        self.preview_canvas.coords(self.rect_id, x1, y1, x2, y2) 
+        self.reset_crop_btn.configure(state="normal")
+        
+        print(f"Crop selected (Real video coords): x={real_x}, y={real_y}, w={real_w_crop}, h={real_h_crop}")
+
+    def reset_crop(self):
+        if self.rect_id:
+            self.preview_canvas.delete(self.rect_id)
+            self.rect_id = None
+        self.crop_box_real = None
+        self.reset_crop_btn.configure(state="disabled")
+
+    def draw_existing_crop_box(self):
+        if not self.crop_box_real or not self.cap: return
+        
+        real_x, real_y, real_w_crop, real_h_crop = self.crop_box_real
+        
+        # 換算回當下畫布座標
+        x1 = real_x * self.preview_scale
+        y1 = real_y * self.preview_scale
+        x2 = (real_x + real_w_crop) * self.preview_scale
+        y2 = (real_y + real_h_crop) * self.preview_scale
+        
+        if self.rect_id:
+            self.preview_canvas.delete(self.rect_id)
+        
+        self.rect_id = self.preview_canvas.create_rectangle(
+            x1, y1, x2, y2, outline="#E74C3C", width=2, dash=(4, 2)
+        )
+
+    def render_image(self, frame):
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        img = Image.fromarray(frame_rgb)
+        
+        # 使用真實影片長寬乘以縮放比例
+        new_w = max(1, int(self.real_w * self.preview_scale))
+        new_h = max(1, int(self.real_h * self.preview_scale))
+        
+        img = img.resize((new_w, new_h), Image.LANCZOS)
+        
+        self.tk_img = ImageTk.PhotoImage(image=img)
+        
+        self.preview_canvas.config(width=new_w, height=new_h)
+        self.preview_canvas.delete("video_frame")
+        self.preview_canvas.create_image(0, 0, anchor="nw", image=self.tk_img, tags="video_frame")
+        self.preview_canvas.tag_lower("video_frame") 
+
+    # ================= UI 更新與核心邏輯 =================
     def update_fps_label(self, value):
         self.fps_label.configure(text=f"Target FPS: {int(value)}")
 
     def update_quality_label(self, value):
         self.quality_label.configure(text=f"JPEG Quality: {int(value)}")
         
-    # ================= 核心邏輯 =================
+    def on_export_mode_change(self, value):
+        state = "normal" if value == "Frames" else "disabled"
+        self.fps_slider.configure(state=state)
+        self.quality_slider.configure(state=state)
+        text_color = "white" if value == "Frames" else "gray"
+        self.fps_label.configure(text_color=text_color)
+        self.quality_label.configure(text_color=text_color)
+        
     def load_video(self):
-        file_path = filedialog.askopenfilename(filetypes=[("Video Files", "*.mp4 *.avi *.mov")])
+        file_path = filedialog.askopenfilename(filetypes=[("Video Files", "*.mp4 *.avi *.mov *.mkv")])
         if not file_path: return
 
         self.stop_playback()
@@ -280,14 +404,18 @@ class VideoExtractorApp(ctk.CTk):
         self.video_fps = self.cap.get(cv2.CAP_PROP_FPS)
         total_frames = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
         self.duration = total_frames / self.video_fps if self.video_fps > 0 else 0
+        
+        # 取得影片真實長寬 (1440x1080)
+        self.real_w = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        self.real_h = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-        self.info_label.configure(text=f"Loaded: {os.path.basename(file_path)} | Length: {self.duration:.2f}s | FPS: {self.video_fps:.2f}", text_color="white")
+        self.info_label.configure(text=f"Loaded: {os.path.basename(file_path)} | {self.real_w}x{self.real_h} | Length: {self.duration:.2f}s | FPS: {self.video_fps:.2f}", text_color="white")
 
-        # 重置縮放
-        self.preview_scale = 1.0
+        self.preview_scale = 0.8
+        
         self.timeline.zoom_level = 1.0
         self.timeline.set_max(self.duration)
-        
+        self.reset_crop() 
         self.clear_queue() 
         
         self.play_btn.configure(state="normal")
@@ -307,18 +435,6 @@ class VideoExtractorApp(ctk.CTk):
         clip_duration = end_sec - start_sec
         self.time_info_label.configure(text=f"[ {start_sec:.2f}s  -  {end_sec:.2f}s ]  Length: {clip_duration:.2f}s")
 
-    def render_image(self, frame):
-        # 負責將 cv2 畫面加上縮放比例並渲染至 UI
-        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        img = Image.fromarray(frame_rgb)
-        
-        new_w = int(640 * self.preview_scale)
-        new_h = int(360 * self.preview_scale)
-        ctk_img = ctk.CTkImage(light_image=img, dark_image=img, size=(new_w, new_h))
-        
-        self.preview_label.configure(image=ctk_img, text="")
-        self.preview_label.image = ctk_img
-
     def show_frame_at(self, seconds):
         if not self.cap: return
         self.current_sec = seconds
@@ -327,12 +443,11 @@ class VideoExtractorApp(ctk.CTk):
         if ret:
             self.render_image(frame)
 
-    # ================= 區段暫存邏輯 =================
+    # ================= 區段暫存與播放控制 =================
     def add_to_queue(self):
         start_sec, end_sec = self.timeline.get_vals()
         clip_duration = end_sec - start_sec
         if clip_duration <= 0: return
-
         self.segments_queue.append((start_sec, end_sec))
         self.update_queue_ui()
         
@@ -351,12 +466,10 @@ class VideoExtractorApp(ctk.CTk):
             recent_segments = self.segments_queue[-3:]
             display_text += ", ".join([f"[{s:.1f}s-{e:.1f}s]" for s, e in recent_segments])
             if count > 3: display_text += " ..."
-            
             self.queue_label.configure(text=display_text)
             self.clear_queue_btn.configure(state="normal")
             self.extract_btn.configure(text=f"🚀 Extract {count} Segments")
 
-    # ================= 播放控制邏輯 =================
     def toggle_play(self):
         if self.is_playing:
             self.stop_playback()
@@ -367,7 +480,6 @@ class VideoExtractorApp(ctk.CTk):
         if not self.cap: return
         self.is_playing = True
         self.play_btn.configure(text="⏸ Stop", fg_color="#E74C3C", hover_color="#C0392B")
-        
         start_sec, _ = self.timeline.get_vals()
         self.cap.set(cv2.CAP_PROP_POS_MSEC, start_sec * 1000)
         self.play_loop()
@@ -378,14 +490,12 @@ class VideoExtractorApp(ctk.CTk):
             self.after_cancel(self.play_after_id)
             self.play_after_id = None
         self.play_btn.configure(text="▶ Play", fg_color="#F39C12", hover_color="#D68910")
-        
         if self.cap:
             start_sec, _ = self.timeline.get_vals()
             self.show_frame_at(start_sec)
 
     def play_loop(self):
         if not self.is_playing: return
-        
         _, end_sec = self.timeline.get_vals()
         self.current_sec = self.cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0
 
@@ -401,13 +511,14 @@ class VideoExtractorApp(ctk.CTk):
         else:
             self.stop_playback()
 
-    # ================= 擷取邏輯 =================
+    # ================= 擷取邏輯 (包含 FFmpeg Crop) =================
     def run_extraction(self):
         self.stop_playback()
         
         segments_to_process = self.segments_queue if self.segments_queue else [self.timeline.get_vals()]
         
         output_folder = self.folder_entry.get()
+        export_mode = self.export_mode.get() 
         fps_to_save = int(self.fps_slider.get())
         quality = int(self.quality_slider.get())
 
@@ -431,29 +542,54 @@ class VideoExtractorApp(ctk.CTk):
                 if clip_duration <= 0: continue
                 
                 current_timestamp = int(time.time()) + idx 
-                output_pattern = os.path.join(output_folder, f"clip_{current_timestamp}_frame_%05d.jpg")
+                
+                vf_filters = []
+                
+                if export_mode == "Frames":
+                    vf_filters.append(f"fps={fps_to_save}")
+                    
+                if self.crop_box_real:
+                    x, y, w, h = self.crop_box_real
+                    vf_filters.append(f"crop={w}:{h}:{x}:{y}")
 
                 command = [
                     ffmpeg_path, '-y',
                     '-ss', str(start_sec),
                     '-t', str(clip_duration),
-                    '-i', self.video_path,
-                    '-vf', f'fps={fps_to_save}',
-                    '-q:v', str(quality),
-                    output_pattern
+                    '-i', self.video_path
                 ]
+                
+                if vf_filters:
+                    command.extend(['-vf', ",".join(vf_filters)])
+
+                if export_mode == "Frames":
+                    output_pattern = os.path.join(output_folder, f"clip_{current_timestamp}_frame_%05d.jpg")
+                    command.extend(['-q:v', str(quality), output_pattern])
+                else: 
+                    output_pattern = os.path.join(output_folder, f"clip_{current_timestamp}.mp4")
+                    command.extend([
+                        '-c:v', 'libx264', 
+                        '-preset', 'fast',
+                        '-c:a', 'aac',     
+                        output_pattern
+                    ])
 
                 subprocess.run(command, capture_output=True, text=True, check=True, encoding='utf-8')
                 
-                new_files_count = len([f for f in os.listdir(output_folder) if f"clip_{current_timestamp}" in f])
-                total_new_files += new_files_count
+                if export_mode == "Frames":
+                    new_files_count = len([f for f in os.listdir(output_folder) if f"clip_{current_timestamp}" in f])
+                    total_new_files += new_files_count
+                else:
+                    total_new_files += 1 
 
             end_time_total = time.time()
+            
+            unit_name = "frames" if export_mode == "Frames" else "videos"
             messagebox.showinfo(
                 "Success", 
                 f"Batch Extraction successful!\n\n"
                 f"Processed {len(segments_to_process)} segments.\n"
-                f"Added {total_new_files} new frames to '{output_folder}'.\n"
+                f"Added {total_new_files} new {unit_name} to '{output_folder}'.\n"
                 f"Time taken: {end_time_total - start_time_total:.2f}s"
             )
             
